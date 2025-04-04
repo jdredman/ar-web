@@ -6,6 +6,8 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>AR Camera</title>
+  <!-- Add favicon to prevent 404 error -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📷</text></svg>">
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0"></script>
   <style>
@@ -206,6 +208,34 @@
     // Debug function to help identify issues
     function debugLog(message) {
       console.log(message);
+    }
+
+    // Add the missing goFullscreen function
+    function goFullscreen() {
+      debugLog("Requesting fullscreen mode");
+      
+      try {
+        const docEl = document.documentElement;
+        
+        if (docEl.requestFullscreen) {
+          docEl.requestFullscreen()
+            .catch(err => debugLog("Fullscreen error: " + err.message));
+        } else if (docEl.webkitRequestFullscreen) {
+          docEl.webkitRequestFullscreen()
+            .catch(err => debugLog("Webkit fullscreen error: " + err.message));
+        } else if (docEl.mozRequestFullScreen) {
+          docEl.mozRequestFullScreen()
+            .catch(err => debugLog("Mozilla fullscreen error: " + err.message));
+        } else if (docEl.msRequestFullscreen) {
+          docEl.msRequestFullscreen()
+            .catch(err => debugLog("MS fullscreen error: " + err.message));
+        } else {
+          debugLog("Fullscreen API not supported");
+        }
+      } catch (error) {
+        debugLog("Fullscreen request error: " + error.message);
+        // Continue even if fullscreen fails
+      }
     }
 
     async function setupCamera(facingMode = 'user') {
@@ -455,6 +485,12 @@
     window.addEventListener('resize', updateCanvasDimensions);
     window.addEventListener('orientationchange', () => {
       setTimeout(updateCanvasDimensions, 200); // Small delay to allow rotation to complete
+    });
+
+    // Handle fullscreen changes
+    document.addEventListener('fullscreenchange', () => {
+      debugLog("Fullscreen state changed");
+      updateCanvasDimensions();
     });
 
     // Start loading on page load
