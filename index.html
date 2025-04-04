@@ -186,7 +186,45 @@
 
     const backgroundImg = new Image();
     backgroundImg.crossOrigin = "anonymous";
+    
+    // Monitor background image loading status
+    let backgroundLoaded = false;
+    
+    // Use a direct link to ensure image loads properly
     backgroundImg.src = 'https://jdredman.github.io/ar-web/dfs-background.jpg';
+    
+    backgroundImg.onload = function() {
+      backgroundLoaded = true;
+      debugLog("Background image loaded successfully: " + backgroundImg.width + "x" + backgroundImg.height);
+    };
+    
+    backgroundImg.onerror = function(e) {
+      debugLog("Background image failed to load: " + e);
+      showError("Background failed to load. Using fallback.");
+      // Create a gradient fallback
+      createFallbackBackground();
+    };
+
+    // Create a fallback background in case the image fails to load
+    function createFallbackBackground() {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 640;
+      tempCanvas.height = 480;
+      const tempCtx = tempCanvas.getContext('2d');
+      
+      // Create a gradient
+      const gradient = tempCtx.createLinearGradient(0, 0, 0, tempCanvas.height);
+      gradient.addColorStop(0, '#2980b9');
+      gradient.addColorStop(1, '#6dd5fa');
+      
+      tempCtx.fillStyle = gradient;
+      tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+      
+      // Convert to image
+      const dataUrl = tempCanvas.toDataURL();
+      backgroundImg.src = dataUrl;
+      backgroundLoaded = true;
+    }
 
     let net;
     let animationId;
@@ -380,6 +418,15 @@
           return;
         }
         
+        // Make sure we have a background image before proceeding
+        if (!backgroundLoaded) {
+          debugLog("Waiting for background image to load...");
+          if (!backgroundImg.complete) {
+            createFallbackBackground(); // Create fallback if taking too long
+          }
+          return;
+        }
+        
         isProcessing = true;
         lastFrameTime = timestamp;
 
@@ -389,25 +436,45 @@
           updateCanvasDimensions();
         }
 
+        // IMPORTANT: Clear the canvas first to avoid any blending issues
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Reset composite operation to default
+        ctx.globalCompositeOperation = 'source-over';
+        
+        // Draw background - make sure it covers the entire canvas
+        if (backgroundLoaded) {
+          // Draw background with proper scaling to fill the canvas
+          ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
+        } else {
+          // Fallback solid color if image fails
+          ctx.fillStyle = '#3498db';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
         // Get person segmentation with more tolerant settings
         const segmentation = await net.segmentPerson(video, {
-          internalResolution: 'low', // Lower resolution for better performance
-          segmentationThreshold: 0.6, // More tolerant threshold
+          internalResolution: 'low',
+          segmentationThreshold: 0.6,
           maxDetections: 1,
         });
 
-        // Draw background
-        ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
-        
-        // Draw video frame
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
         // Apply segmentation mask
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const pixels = imageData.data;
-        
         if (segmentation && segmentation.data) {
+          // Create a temporary canvas for the foreground
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = canvas.width;
+          tempCanvas.height = canvas.height;
+          const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+          
+          // Draw video to temp canvas
+          tempCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          
+          // Get the data
+          const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
+          const pixels = imageData.data;
+          
+          // Apply mask
           for (let i = 0; i < pixels.length; i += 4) {
             const n = i / 4;
             if (n < segmentation.data.length && !segmentation.data[n]) {
@@ -415,8 +482,11 @@
             }
           }
           
+          // Put the masked data back to temp canvas
+          tempCtx.putImageData(imageData, 0, 0);
+          
           // Draw the masked person over the background
-          ctx.putImageData(imageData, 0, 0);
+          ctx.drawImage(tempCanvas, 0, 0);
         } else {
           debugLog("No segmentation data available");
         }
@@ -502,15 +572,19 @@
       // Force canvas to be visible
       canvas.style.display = 'block';
       
-      // Preload background image
-      if (!backgroundImg.complete) {
-        backgroundImg.onload = () => {
-          debugLog("Background image loaded");
-        };
-        backgroundImg.onerror = () => {
-          debugLog("Failed to load background image");
-          showError("Failed to load background image");
-        };
+      // Test if background image is already loaded
+      if (backgroundImg.complete) {
+        backgroundLoaded = true;
+        debugLog("Background image was already loaded");
+      } else {
+        debugLog("Waiting for background image to load...");
+        // Set a timeout to use fallback if image doesn't load
+        setTimeout(() => {
+          if (!backgroundLoaded) {
+            debugLog("Background image load timeout - using fallback");
+            createFallbackBackground();
+          }
+        }, 5000);
       }
     });
   </script>
