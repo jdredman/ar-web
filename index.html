@@ -2,81 +2,430 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AR Background with Picsum</title>
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>AR Camera</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0"></script>
   <style>
-    body { margin: 0; overflow: hidden; }
+    * { box-sizing: border-box; }
+    html, body { 
+      margin: 0; 
+      padding: 0; 
+      width: 100%; 
+      height: 100%; 
+      overflow: hidden;
+      background-color: #000;
+      touch-action: manipulation;
+    }
+    
     canvas, video { display: none; }
-    #outputCanvas { display: block; width: 100vw; height: 100vh; object-fit: cover; }
+    
+    #camera-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+    
+    #outputCanvas { 
+      object-fit: cover;
+      width: 100%;
+      height: 100%;
+    }
+    
+    #loading { 
+      position: fixed; 
+      top: 0; 
+      left: 0; 
+      width: 100%; 
+      height: 100%; 
+      background: #000; 
+      color: white; 
+      display: flex; 
+      flex-direction: column;
+      align-items: center; 
+      justify-content: center; 
+      font-family: system-ui, -apple-system, sans-serif;
+      z-index: 10;
+    }
+    
+    #loading .spinner {
+      width: 50px;
+      height: 50px;
+      border: 5px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 1s ease-in-out infinite;
+      margin-bottom: 20px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    #error {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      padding: 15px;
+      background: rgba(255,0,0,0.8);
+      color: white;
+      text-align: center;
+      display: none;
+      z-index: 11;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    
+    #camera-ui {
+      position: fixed;
+      bottom: 20px;
+      left: 0;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 5;
+    }
+    
+    .camera-button {
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.3);
+      border: 4px solid white;
+      margin: 0 15px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .camera-button:active {
+      transform: scale(0.95);
+      background: rgba(255,255,255,0.5);
+    }
+    
+    #switch-camera {
+      width: 50px;
+      height: 50px;
+      background: rgba(0,0,0,0.5);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    #switch-camera svg {
+      width: 30px;
+      height: 30px;
+      fill: white;
+    }
+    
+    .permission-button {
+      padding: 12px 24px;
+      background: #3498db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 20px;
+    }
   </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline></video>
-  <canvas id="outputCanvas"></canvas>
+  <div id="loading">
+    <div class="spinner"></div>
+    <p>Getting camera ready...</p>
+    <button id="permission-button" class="permission-button">Start Camera</button>
+  </div>
+  <div id="error"></div>
+  
+  <div id="camera-container">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="outputCanvas"></canvas>
+  </div>
+  
+  <div id="camera-ui" style="display: none;">
+    <div id="switch-camera">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+        <path d="M7.11 8.53L5.7 7.11C4.8 8.27 4.24 9.61 4.07 11h2.02c.14-.87.49-1.72 1.02-2.47zM6.09 13H4.07c.17 1.39.72 2.73 1.62 3.89l1.41-1.42c-.52-.75-.87-1.59-1.01-2.47zm1.01 5.32c1.16.9 2.51 1.44 3.9 1.61V17.9c-.87-.15-1.71-.49-2.46-1.03L7.1 18.32zM13 4.07V1L8.45 5.55 13 10V6.09c2.84.48 5 2.94 5 5.91s-2.16 5.43-5 5.91v2.02c3.95-.49 7-3.85 7-7.93s-3.05-7.44-7-7.93z"/>
+      </svg>
+    </div>
+    <div id="capture" class="camera-button"></div>
+  </div>
   
   <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('outputCanvas');
     const ctx = canvas.getContext('2d');
+    const loadingElement = document.getElementById('loading');
+    const errorElement = document.getElementById('error');
+    const cameraUI = document.getElementById('camera-ui');
+    const captureButton = document.getElementById('capture');
+    const switchCameraButton = document.getElementById('switch-camera');
+    const permissionButton = document.getElementById('permission-button');
 
     const backgroundImg = new Image();
+    backgroundImg.crossOrigin = "anonymous";
     backgroundImg.src = 'https://jdredman.github.io/ar-web/dfs-background.jpg';
 
-    async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      video.srcObject = stream;
-      return new Promise(resolve => {
-        video.onloadedmetadata = () => {
-          resolve(video);
+    let net;
+    let animationId;
+    let lastFrameTime = 0;
+    const FRAME_RATE = 24;
+    const FRAME_INTERVAL = 1000 / FRAME_RATE;
+    let currentFacingMode = 'user'; // front camera by default
+
+    function showError(message) {
+      errorElement.textContent = message;
+      errorElement.style.display = 'block';
+      setTimeout(() => {
+        errorElement.style.display = 'none';
+      }, 5000);
+    }
+
+    // Request fullscreen to make it more like a camera app
+    function goFullscreen() {
+      if (!document.fullscreenElement) {
+        const docEl = document.documentElement;
+        if (docEl.requestFullscreen) {
+          docEl.requestFullscreen();
+        } else if (docEl.webkitRequestFullscreen) {
+          docEl.webkitRequestFullscreen();
+        } else if (docEl.mozRequestFullScreen) {
+          docEl.mozRequestFullScreen();
+        } else if (docEl.msRequestFullscreen) {
+          docEl.msRequestFullscreen();
+        }
+      }
+    }
+
+    async function setupCamera(facingMode = 'user') {
+      try {
+        // Stop any existing stream
+        if (video.srcObject) {
+          video.srcObject.getTracks().forEach(track => track.stop());
+        }
+        
+        // Try to get the camera with specific constraints for better performance
+        const constraints = {
+          video: {
+            width: { ideal: window.innerWidth },
+            height: { ideal: window.innerHeight },
+            facingMode: facingMode
+          }
         };
-      });
+        
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        currentFacingMode = facingMode;
+        
+        return new Promise(resolve => {
+          video.onloadedmetadata = () => {
+            video.play().then(() => {
+              // Show camera UI once camera is ready
+              cameraUI.style.display = 'flex';
+              resolve(video);
+            }).catch(error => {
+              showError("Tap to enable camera");
+              
+              // Add a tap handler for Safari that requires user interaction
+              document.addEventListener('click', () => {
+                video.play().then(() => {
+                  cameraUI.style.display = 'flex';
+                  resolve(video);
+                }).catch(e => showError("Camera error: " + e.message));
+              }, { once: true });
+            });
+          };
+        });
+      } catch (error) {
+        if (error.name === 'NotAllowedError') {
+          showError("Camera access denied. Please allow camera access and reload.");
+          loadingElement.innerHTML = `
+            <p>Camera access was denied</p>
+            <button onclick="location.reload()" class="permission-button">Try Again</button>
+          `;
+        } else {
+          showError("Camera error: " + error.message);
+        }
+        throw error;
+      }
+    }
+
+    async function loadBodyPixModel() {
+      try {
+        return await bodyPix.load({
+          architecture: 'MobileNetV1',
+          outputStride: 16,
+          multiplier: 0.75,
+          quantBytes: 2
+        });
+      } catch (error) {
+        showError("Failed to load AR effects: " + error.message);
+        throw error;
+      }
     }
 
     async function startAR() {
-      await setupCamera();
-      const net = await bodyPix.load();
+      try {
+        await setupCamera(currentFacingMode);
+        if (!net) {
+          net = await loadBodyPixModel();
+        }
 
-      video.width = video.videoWidth;
-      video.height = video.videoHeight;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+        // Set canvas dimensions based on video
+        updateCanvasDimensions();
+        
+        // Start the drawing loop
+        loadingElement.style.display = 'none';
+        requestAnimationFrame(drawFrame);
+      } catch (error) {
+        console.error("AR startup error:", error);
+      }
+    }
 
-      async function drawFrame() {
+    function updateCanvasDimensions() {
+      // Handle orientation and size correctly
+      const containerWidth = document.getElementById('camera-container').clientWidth;
+      const containerHeight = document.getElementById('camera-container').clientHeight;
+      
+      if (video.videoWidth && video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      } else {
+        canvas.width = containerWidth;
+        canvas.height = containerHeight;
+      }
+    }
+
+    async function drawFrame(timestamp) {
+      try {
+        animationId = requestAnimationFrame(drawFrame);
+        
+        // Throttle processing for better performance
+        if (timestamp - lastFrameTime < FRAME_INTERVAL) {
+          return;
+        }
+        lastFrameTime = timestamp;
+        
+        // Only process if video is playing and visible
+        if (video.paused || video.ended || document.hidden) {
+          return;
+        }
+
+        // Check if we need to update canvas dimensions
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+          updateCanvasDimensions();
+        }
+
+        // Get person segmentation
         const segmentation = await net.segmentPerson(video, {
           internalResolution: 'medium',
           segmentationThreshold: 0.7,
+          maxDetections: 1, 
         });
 
+        // Clear canvas with background
+        ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
+        
+        // Create a composite operation
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        // Create a mask from segmentation data
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const pixels = imageData.data;
-
-        // Draw background image
-        ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
-
-        // Draw person (foreground)
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
+        
         for (let i = 0; i < pixels.length; i += 4) {
           const n = i / 4;
           if (!segmentation.data[n]) {
-            // Transparent background pixel
-            frame.data[i + 3] = 0;
+            pixels[i + 3] = 0; // Make background transparent
           }
         }
-
-        ctx.putImageData(frame, 0, 0);
-        requestAnimationFrame(drawFrame);
+        
+        // Draw the masked person over the background
+        ctx.putImageData(imageData, 0, 0);
+      } catch (error) {
+        console.error("Frame processing error:", error);
       }
-
-      drawFrame();
     }
 
-    backgroundImg.onload = () => {
+    // Switch between front and back cameras
+    switchCameraButton.addEventListener('click', () => {
+      const newFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+      setupCamera(newFacingMode).catch(error => {
+        showError("Failed to switch camera: " + error.message);
+      });
+    });
+    
+    // Capture photo functionality
+    captureButton.addEventListener('click', () => {
+      // Create temporary canvas for the photo
+      const photoCanvas = document.createElement('canvas');
+      photoCanvas.width = canvas.width;
+      photoCanvas.height = canvas.height;
+      const photoCtx = photoCanvas.getContext('2d');
+      
+      // Draw the current frame to the photo canvas
+      photoCtx.drawImage(canvas, 0, 0);
+      
+      // Create download link
+      try {
+        const link = document.createElement('a');
+        link.download = 'ar-photo-' + new Date().getTime() + '.png';
+        link.href = photoCanvas.toDataURL('image/png');
+        link.click();
+        
+        // Visual feedback
+        captureButton.style.backgroundColor = 'white';
+        setTimeout(() => {
+          captureButton.style.backgroundColor = 'rgba(255,255,255,0.3)';
+        }, 200);
+      } catch (e) {
+        showError("Failed to save photo: " + e.message);
+      }
+    });
+
+    // Handle permission button click
+    permissionButton.addEventListener('click', () => {
+      goFullscreen();
       startAR();
-    };
+    });
+
+    // Clean up resources when switching tabs
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && animationId) {
+        cancelAnimationFrame(animationId);
+      } else if (!document.hidden && net) {
+        requestAnimationFrame(drawFrame);
+      }
+    });
+
+    // Handle window resize and orientation change
+    window.addEventListener('resize', updateCanvasDimensions);
+    window.addEventListener('orientationchange', () => {
+      setTimeout(updateCanvasDimensions, 200); // Small delay to allow rotation to complete
+    });
+
+    // Start loading on page load
+    window.addEventListener('load', () => {
+      // Don't auto-start - wait for permission button
+      permissionButton.style.display = 'block';
+      
+      // Preload background image
+      if (!backgroundImg.complete) {
+        backgroundImg.onload = () => console.log("Background image loaded");
+        backgroundImg.onerror = () => showError("Failed to load background image");
+      }
+    });
   </script>
 </body>
 </html>
