@@ -229,10 +229,16 @@
     let net;
     let animationId;
     let lastFrameTime = 0;
-    const FRAME_RATE = 15; // Reduced from 24 to 15 for better performance
+    const FRAME_RATE = 10; // Reduced from 15 to 10 fps
     const FRAME_INTERVAL = 1000 / FRAME_RATE;
     let currentFacingMode = 'user'; // front camera by default
     let isProcessing = false; // Flag to prevent overlapping processing
+
+    // Create a persistent temporary canvas for better performance
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+
+    let lastSegmentation = null; // Track last segmentation data to reduce flickering
 
     function showError(message) {
       console.error("Error:", message);
@@ -390,10 +396,15 @@
       if (video.videoWidth && video.videoHeight) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
+        // Also update temp canvas dimensions
+        tempCanvas.width = video.videoWidth;
+        tempCanvas.height = video.videoHeight;
         debugLog(`Canvas dimensions set to ${canvas.width}x${canvas.height}`);
       } else {
         canvas.width = containerWidth;
         canvas.height = containerHeight;
+        tempCanvas.width = containerWidth;
+        tempCanvas.height = containerHeight;
         debugLog(`Canvas dimensions set to container size: ${canvas.width}x${canvas.height}`);
       }
       
@@ -402,9 +413,10 @@
     }
 
     async function drawFrame(timestamp) {
+      // Schedule next frame immediately to ensure smooth animation chain
+      animationId = requestAnimationFrame(drawFrame);
+      
       try {
-        animationId = requestAnimationFrame(drawFrame);
-        
         // Only proceed if we're not already processing a frame
         if (isProcessing) return;
         
@@ -420,77 +432,80 @@
         
         // Make sure we have a background image before proceeding
         if (!backgroundLoaded) {
-          debugLog("Waiting for background image to load...");
           if (!backgroundImg.complete) {
-            createFallbackBackground(); // Create fallback if taking too long
+            createFallbackBackground();
           }
           return;
         }
         
         isProcessing = true;
-        lastFrameTime = timestamp;
-
-        // Ensure canvas dimensions match video
+        
+        // Ensure dimensions match before processing
         if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-          debugLog("Updating canvas dimensions to match video");
           updateCanvasDimensions();
         }
-
-        // IMPORTANT: Clear the canvas first to avoid any blending issues
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        // Reset composite operation to default
-        ctx.globalCompositeOperation = 'source-over';
+        // STEP 1: Process segmentation less frequently to reduce flickering
+        let segmentation = lastSegmentation;
         
-        // Draw background - make sure it covers the entire canvas
-        if (backgroundLoaded) {
-          // Draw background with proper scaling to fill the canvas
-          ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
-        } else {
-          // Fallback solid color if image fails
-          ctx.fillStyle = '#3498db';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Only run segmentation every other frame to improve performance
+        if (!lastSegmentation || (timestamp - lastFrameTime) > FRAME_INTERVAL * 2) {
+          try {
+            // Get person segmentation with more tolerant settings
+            segmentation = await net.segmentPerson(video, {
+              internalResolution: 'low',
+              segmentationThreshold: 0.6,
+              maxDetections: 1,
+            });
+            
+            // Store for reuse to reduce flickering
+            if (segmentation && segmentation.data) {
+              lastSegmentation = segmentation;
+            }
+          } catch (segError) {
+            debugLog("Segmentation error: " + segError.message);
+            // Continue with last known segmentation if available
+          }
         }
-
-        // Get person segmentation with more tolerant settings
-        const segmentation = await net.segmentPerson(video, {
-          internalResolution: 'low',
-          segmentationThreshold: 0.6,
-          maxDetections: 1,
-        });
-
-        // Apply segmentation mask
+        
+        // STEP 2: Prepare the masked foreground on the temp canvas
         if (segmentation && segmentation.data) {
-          // Create a temporary canvas for the foreground
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = canvas.width;
-          tempCanvas.height = canvas.height;
-          const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+          // Clear temp canvas first
+          tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
           
           // Draw video to temp canvas
-          tempCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
           
-          // Get the data
-          const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
+          // Get the pixel data
+          const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
           const pixels = imageData.data;
           
-          // Apply mask
+          // Apply mask more efficiently
           for (let i = 0; i < pixels.length; i += 4) {
             const n = i / 4;
             if (n < segmentation.data.length && !segmentation.data[n]) {
-              pixels[i + 3] = 0; // Make background transparent
+              // Make non-person pixels fully transparent
+              pixels[i + 3] = 0;
             }
           }
           
           // Put the masked data back to temp canvas
           tempCtx.putImageData(imageData, 0, 0);
-          
-          // Draw the masked person over the background
-          ctx.drawImage(tempCanvas, 0, 0);
-        } else {
-          debugLog("No segmentation data available");
         }
         
+        // STEP 3: Draw the final composition to the main canvas
+        // Clear main canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw background first
+        ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
+        
+        // Draw the masked person from temp canvas over the background
+        if (segmentation && segmentation.data) {
+          ctx.drawImage(tempCanvas, 0, 0);
+        }
+        
+        lastFrameTime = timestamp;
         isProcessing = false;
       } catch (error) {
         console.error("Frame processing error:", error);
